@@ -1,0 +1,16 @@
+filebeat.inputs:
+- type: log
+  enabled: true
+  paths:
+    - /var/www/html/data/*/nextcloud.log
+    - /var/www/html/data/nextcloud.log
+  # Nextcloud log est en JSON, on demande à Filebeat de le parser
+  json.keys_under_root: true
+  json.overwrite_keys: true
+  json.add_error_key: true
+
+output.elasticsearch:
+  hosts: ["elasticsearch:9200"]
+
+setup.kibana:
+  host: "kibana:5601"

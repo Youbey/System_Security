@@ -1,0 +1,81 @@
+version: '3.8'
+
+services:
+  # --- BASE DE DONNÉES ---
+  db:
+    image: mariadb:10.6
+    command: --transaction-isolation=READ-COMMITTED --binlog-format=ROW --skip-name-resolve
+    restart: always
+    volumes:
+      - ./volumes/db_data:/var/lib/mysql
+    environment:
+      - MYSQL_ROOT_PASSWORD=cyber_root_pwd
+      - MYSQL_PASSWORD=nextcloud_pwd
+      - MYSQL_DATABASE=nextcloud
+      - MYSQL_USER=nextcloud
+      - MARIADB_MYSQL_LOCALHOST_USER=1
+
+  # --- CACHE ---
+  redis:
+    image: redis:alpine
+    restart: always
+
+  # --- APPLICATION NEXTCLOUD ---
+  nextcloud:
+    image: nextcloud:latest
+    restart: always
+    ports:
+      - "8080:80"
+    links:
+      - db
+      - redis
+    volumes:
+      - ./volumes/nextcloud_data:/var/www/html
+    environment:
+      - MYSQL_PASSWORD=nextcloud_pwd
+      - MYSQL_DATABASE=nextcloud
+      - MYSQL_USER=nextcloud
+      - MYSQL_HOST=db
+      - REDIS_HOST=redis
+      # Étape 2 : Configuration des logs via variables d'environnement
+      - NEXTCLOUD_ADMIN_USER=admin
+      - NEXTCLOUD_ADMIN_PASSWORD=admin_pwd
+      - LOG_LEVEL=0 # 0 = DEBUG
+      - LOG_TYPE=file
+
+  # --- ELASTICSEARCH ---
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.10.2
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false  # Désactive l'authentification pour le lab
+      - xpack.security.enrollment.enabled=false
+      - "ES_JAVA_OPTS=-Xms1g -Xmx1g"
+    volumes:
+      - ./volumes/es_data:/usr/share/elasticsearch/data
+    ports:
+      - "9200:9200"
+
+  # --- KIBANA ---
+  kibana:
+    image: docker.elastic.co/kibana/kibana:8.10.2
+    environment:
+      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+      - xpack.security.enabled=false # Désactive l'écran de login/token
+    ports:
+      - "5601:5601"
+    depends_on:
+      - elasticsearch
+
+  # --- FILEBEAT ---
+  filebeat:
+    image: docker.elastic.co/beats/filebeat:8.10.2
+    user: root
+    # L'option -strict.perms=false règle votre erreur de permissions
+    command: filebeat -e -strict.perms=false
+    volumes:
+      - ./config/filebeat/filebeat.yml:/usr/share/filebeat/filebeat.yml:ro
+      - ./volumes/nextcloud_data:/var/www/html/data:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on:
+      - elasticsearch
