@@ -1,0 +1,38 @@
+filebeat.inputs:
+  - type: log
+    enabled: true
+    paths:
+      - /var/www/html/data/nextcloud.log
+      - /var/www/html/data/*/nextcloud.log
+    json.keys_under_root: true
+    json.overwrite_keys: true
+    json.add_error_key: true
+
+processors:
+  - add_fields:
+      target: service
+      fields:
+        name: nextcloud
+        environment: lab
+  - add_fields:
+      target: app
+      fields:
+        name: nextcloud
+
+
+  - rename:
+      fields:
+        - from: "url"
+          to: "nextcloud_url"
+        - from: "user"
+          to: "nextcloud_user"
+        - from: "method"
+          to: "http_method"
+      ignore_missing: true
+      fail_on_error: false
+
+output.elasticsearch:
+  hosts: ["elasticsearch:9200"]
+
+setup.kibana:
+  host: "kibana:5601"
