@@ -2,95 +2,125 @@
 
 Ce module est dédié à la génération et à l'analyse de logs pour l'application **Nextcloud** dans le cadre du projet de détection d'attaques.
 
-## 1. Description de l'Application
-- **Nom** : Nextcloud
-- **Architecture** : SOFEA (Frontend JS / Backend PHP API)
-- **Image Docker** : `nextcloud:fpm-alpine`
-- **Rôle** : Plateforme de collaboration et stockage de fichiers.
+## 1. Prérequis
+- Docker et Docker Compose installés.
+- Les ports `8080` (Nextcloud), `9200` (Elasticsearch) et `5601` (Kibana) doivent être libres.
+- Python 3 et le module `requests` (`pip install requests`) pour l'exportation finale.
 
-## 2. Architecture de Déploiement
-Le déploiement repose sur une stack Docker composée de :
-* **Nextcloud (App)** : Coeur de l'application.
-* **MariaDB** : Base de données pour les utilisateurs et métadonnées.
-* **Nginx** : Serveur web / Reverse Proxy.
-* **Redis** : Gestion du cache et des verrous de fichiers.
-* **Filebeat** : Agent de collecte des logs (`/var/www/html/data/nextcloud.log`).
+## 2. Déploiement et Configuration de l'Application
 
-## 3. Configuration des Logs
-Pour garantir un dataset exploitable scientifiquement, la configuration suivante est appliquée dans `config.php` :
-```php
-'log_type' => 'file',
-'logfile' => '/var/www/html/data/nextcloud.log',
-'loglevel' => 0, // Mode DEBUG pour capturer tous les événements
-'log_query' => true,
-```
+1. **Démarrez l'infrastructure :**
+   ```bash
+   docker-compose up -d
+   ```
+   
+## 2. Finalisez l'installation via l'interface web :
+Accédez à http://localhost:8080 et remplissez le formulaire :
 
-## 4. Scénarios d'Utilisation
-### 4.1 Trafic Légitime (Normal)
-Exécution de tests de charge via Gatling et Cypress :
+- Nom d'utilisateur administrateur : admin_cyber (Note : si le nom "admin" est bloqué par des fichiers préexistants, utilisez admin_cyber).
 
-- Navigation dans l'arborescence de fichiers.
+- Mot de passe : admin_pwd
 
-- Upload/Download de documents (PDF, Images, Archives).
+- Base de données : Sélectionnez MySQL/MariaDB (Database user: nextcloud, Database password: nextcloud_pwd, Database name: nextcloud, Database host: db).
 
-- Partage de fichiers entre utilisateurs internes.
-
-- Synchronisation via client WebDAV.
-
-### 4.2 Scénarios d'Attaques (Malveillants)
-
-## 5. Pipline de Données (Elastic Stack)
-
-1. **Ingestion** : Filebeat transmet les logs JSON à Logstash.
-
-2. **Filtrage** : Logstash parse le JSON et ajoute les champs de métadonnées.
-
-3. **Mapping MITRE CAR** : Transformation des champs (ex: remoteAddr -> source.ip).
-
-4. **Visualisation** : Dashboards Kibana pour identifier les pics d'erreurs 4xx/5xx.
-
-## 6. Modélisation Graphe (Neo4j)
-
-Les logs sont exportés pour alimenter un graphe de relations :
-
-- Nœuds : User, IP, File, Action.
-
-- Relations :
-
-    - (User)-[:LOGGED_FROM]->(IP)
-
-    - (User)-[:PERFORMED]->(Action)-[:ON]->(File)
-
-## 7. Comment reproduire le Dataset
-
-**Pré-requis**
-
-- Docker & Docker Compose
-
-- Python 3.x (pour les scripts d'attaque)
-
-- Node.js (pour Cypress)
-
-**Installation**
+## 3.Activer le logging de sécurité avancé :
+Exécutez ces commandes pour configurer Nextcloud afin qu'il génère des logs d'audit complets au format JSON (indispensable pour la détection Brute Force et SQLi) et pour désactiver temporairement la protection anti-bruteforce afin de permettre la génération du dataset :
 ```bash
-# Lancer les conteneurs
-docker-compose up -d
-
-# Initialiser l'application
-# (Configuration admin via http://localhost:8080)
-
-# Lancer la génération de trafic normal
-cd tests/load-testing && ./run-gatling.sh
-
-# Lancer les simulations d'attaques
-cd tests/security && python3 brute_force_sim.py
+docker-compose exec -u 33 nextcloud php occ config:system:set loglevel --value=0 --type=integer
+docker-compose exec -u 33 nextcloud php occ config:system:set log_auth_failures --value=true --type=boolean
+docker-compose exec -u 33 nextcloud php occ config:system:set logtimezone --value="UTC"
+docker-compose exec -u 33 nextcloud php occ config:system:set auth.bruteforce.protection.enabled --value=false --type=boolean
 ```
 
-## 8. Livrables inclus
-**docker-compose.yml** : Configuration de la stack.
+## 3. Préparation de l'Outil de Simulation (Gatling)
 
-**scripts/** : Scripts de génération de trafic et d'attaques.
+Afin d'assurer la compatibilité des scripts de simulation Java, construisez une image Docker personnalisée de Gatling :
 
-**logs/** : Dataset brut et annoté (format MITRE CAR).
+1. Construisez l'image :
+```bash
+docker build --network=host -t my-gatling -f Dockerfile.gatling .
+```
+2. Créez le répertoire de bibliothèques requis par Gatling :
+```bash
+mkdir -p ./traffic_gen/gatling/user-files/lib
+```
 
-**neo4j/** : Scripts Cypher pour l'importation des données.
+## 4. Configuration de l'Ingest Pipeline (Elasticsearch)
+
+Avant de lancer le trafic, configurez Elasticsearch pour qu'il annote automatiquement les logs bruts avec les techniques MITRE ATT&CK associées.
+
+1. Ouvrez Kibana (http://localhost:5601).
+
+2. Naviguez vers Management > Dev Tools.
+
+3. Exécutez la requête suivante pour créer le pipeline nextcloud-mitre :
+```JSON
+PUT _ingest/pipeline/nextcloud-mitre
+{
+  "description": "Pipeline pour annoter les logs Nextcloud avec MITRE ATT&CK",
+  "processors": [
+    {
+      "set": {
+        "if": "ctx.message != null && ctx.message.contains('Login failed')",
+        "field": "mitre.technique.id",
+        "value": "T1110"
+      }
+    },
+    {
+      "set": {
+        "if": "ctx.message != null && (ctx.message.contains('OR 1=1') || ctx.message.contains('UNION SELECT') || ctx.message.contains('DROP TABLE'))",
+        "field": "mitre.technique.id",
+        "value": "T1190"
+      }
+    },
+    {
+      "set": {
+        "if": "ctx.message != null && (ctx.message.contains('OR 1=1') || ctx.message.contains('UNION SELECT') || ctx.message.contains('DROP TABLE'))",
+        "field": "mitre.technique.name",
+        "value": "Exploit Public-Facing Application (SQLi)"
+      }
+    },
+    {
+      "set": {
+        "if": "ctx.message != null && (ctx.message.contains('OR 1=1') || ctx.message.contains('UNION SELECT') || ctx.message.contains('DROP TABLE'))",
+        "field": "mitre.tactic",
+        "value": "Initial Access"
+      }
+    }
+  ]
+}
+```
+
+## 5. Exécution des Scénarios de Trafic:
+Ouvrez plusieurs terminaux pour générer simultanément du trafic légitime et des attaques.
+
+**Terminal 1: Traffic Légitime (Baseline)**
+Génère une utilisation WebDAV normale en boucle (PROPFIND, PUT, GET, DELETE).
+```bash
+while true; do
+  sudo docker run --rm --network host -v ./traffic_gen/gatling/user-files:/opt/gatling/user-files my-gatling -rm local -s simulations.NormalUsage
+  sleep 5
+done
+```
+
+**Terminal 2 : Attaque par Brute Force (T1110)**
+Lancez l'attaque ciblant l'authentification WebDAV.
+```bash
+sudo docker run --rm --network host -v ./traffic_gen/gatling/user-files:/opt/gatling/user-files my-gatling -rm local -s simulations.BruteForce
+```
+
+**Terminal 3 : Attaque par Injection SQL (T1190)**
+Lancez l'attaque par injection SQL ciblée sur les endpoints d'authentification WebDAV.
+```bash
+sudo docker run --rm --network host -v ./traffic_gen/gatling/user-files:/opt/gatling/user-files my-gatling -rm local -s simulations.SqlInjection
+```
+
+## 6. Exportation du Dataset Final
+
+Une fois le trafic généré et les logs annotés en temps réel par Elasticsearch, exportez le dataset sous forme de fichier statique .json.
+
+1. Exécutez le script d'extraction Python :
+```bash
+python3 export_dataset.py
+```
+2. Le fichier nextcloud-final-dataset.json sera généré à la racine du projet. Ce fichier contient les événements complets, incluant les champs bruts de Nextcloud et les métadonnées MITRE injectées.
