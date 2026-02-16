@@ -1,0 +1,4 @@
+volumes/
+.git/
+traffic_gen/gatling/results/
+*.log

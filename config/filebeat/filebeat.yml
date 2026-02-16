@@ -19,7 +19,7 @@ processors:
       fields:
         name: nextcloud
 
-  # Renommer les champs qui entrent en conflit avec ECS
+
   - rename:
       fields:
         - from: "url"

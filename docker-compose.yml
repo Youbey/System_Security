@@ -13,7 +13,6 @@ services:
       - MYSQL_PASSWORD=nextcloud_pwd
       - MYSQL_DATABASE=nextcloud
       - MYSQL_USER=nextcloud
-      - MARIADB_MYSQL_LOCALHOST_USER=1
 
   # --- CACHE ---
   redis:
@@ -71,7 +70,6 @@ services:
   filebeat:
     image: docker.elastic.co/beats/filebeat:8.10.2
     user: root
-    # L'option -strict.perms=false règle votre erreur de permissions
     command: filebeat -e -strict.perms=false
     volumes:
       - ./config/filebeat/filebeat.yml:/usr/share/filebeat/filebeat.yml:ro
